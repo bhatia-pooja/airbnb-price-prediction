@@ -1,0 +1,585 @@
+---
+title: "ML_analysis"
+output: html_notebook
+---
+
+
+```{r}
+airbnb_palette <- c("#FF5A5F", "#00A699", "#767676", "#484848", "#FFB400")
+
+main_uncleaned_data <- read_csv("airbnb1.csv")
+
+# Calculate the percentage of missing data for each column
+missing_data <- main_uncleaned_data %>%
+  summarise(across(everything(), ~ mean(is.na(.)) * 100)) %>%
+  pivot_longer(cols = everything(), names_to = "Variable", values_to = "Missing_Percentage")
+
+```
+
+```{r}
+which(is.na(main_uncleaned_data))
+
+col_missing <- colSums(is.na(main_uncleaned_data))
+
+col_missing
+
+dropped_na <- main_uncleaned_data %>% drop_na()
+
+which(is.na(dropped_na)) # just checking if the cleaning worked or not
+
+Q1 <- quantile(dropped_na$bedrooms, 0.25, na.rm = TRUE)
+Q3 <- quantile(dropped_na$bedrooms, 0.75, na.rm = TRUE)
+IQR <- Q3 - Q1
+
+cleaned_airbnb_data <- dropped_na %>%
+  filter(bedrooms >= (Q1 - 1.5 * IQR) & bedrooms <= (Q3 + 1.5 * IQR))
+
+glimpse(cleaned_airbnb_data)
+```
+
+
+```{r}
+numeric_vars <- c("bathrooms", "bedrooms", "beds", "amenities_count", "minimum_nights", "maximum_nights", "number_of_reviews", "review_scores_rating", "price","availability_30","availability_60","availability_90","availability_365")
+
+categorical_vars <- c("property_type", "room_type", "cancellation_policy", "instant_bookable")
+```
+
+
+```{r}
+for (var in categorical_vars) {
+  # Create dummy variables using model.matrix() and remove intercept column
+  dummy_vars <- model.matrix(as.formula(paste("~", var, "- 1")), data = cleaned_airbnb_data)
+  
+  # Append dummy variables to the original dataset
+  cleaned_airbnb_data <- cbind(cleaned_airbnb_data, dummy_vars)
+}
+
+# Drop columns by selecting the ones not in categorical_vars
+cleaned_airbnb_data <- cleaned_airbnb_data[, !(names(cleaned_airbnb_data) %in% categorical_vars)]
+
+# 
+# # View the updated dataset to verify the dummy variables
+glimpse(cleaned_airbnb_data)
+
+```
+
+```{r}
+#splitting data
+library(caret)
+library(MASS)
+
+set.seed(2)
+trainIndex <- createDataPartition(cleaned_airbnb_data$price, p = 0.6, list = FALSE)
+train <- cleaned_airbnb_data[trainIndex, ]
+test <- cleaned_airbnb_data[-trainIndex, ]
+
+colnames(train)[colnames(train) == "room_typeEntire home/apt"] <- "room_typeEntire_home/apt"
+colnames(train)[colnames(train) == "property_typeBed & Breakfast"] <- "property_typeBed_&_Breakfast"
+
+colnames(test)[colnames(test) == "room_typeEntire home/apt"] <- "room_typeEntire_home/apt"
+colnames(test)[colnames(test) == "property_typeBed & Breakfast"] <- "property_typeBed_&_Breakfast"
+
+```
+
+
+```{r}
+#full model development and analysis
+
+full_model <- lm(price ~ ., data = train)
+summary(full_model)
+```
+
+Significant Variables (p < 0.05):
+
+accommodates (2.48e-14 ***)
+bathrooms (1.17e-12 ***)
+bedrooms (0.003732 **)
+amenities_count (< 2e-16 ***)
+host_since (0.024177 *)
+property_typeApartment (0.011291 *)
+property_typeBed & Breakfast (0.000147 ***)
+room_typeEntire home/apt (0.023806 *)
+
+
+```{r}
+# Check p-values from the model summary
+summary(full_model)$coefficients
+
+# Extract variable names with p-values < 0.05
+significant_vars <- rownames(summary(full_model)$coefficients)[summary(full_model)$coefficients[, "Pr(>|t|)"] < 0.05]
+print(significant_vars)
+
+```
+
+```{r}
+#making model 2 with only significant variables.
+
+# Build the model using only the significant variables
+linear_model_significant <- lm(price ~ accommodates + bathrooms + bedrooms + 
+                               amenities_count + host_since + property_typeApartment +
+                               `property_typeBed_&_Breakfast` + `room_typeEntire_home/apt`, 
+                               data = train)
+
+# Summarize the model to check the results
+summary(linear_model_significant)
+
+```
+
+This shows that just removing the insignificant variables did not improve the Adjusted R^2 or AIC. Infact, the adjusted R^2 and AIC
+
+```{r}
+test_model <- lm(price ~ .-latitude-longitude-property_typeTownhouse-`room_typeEntire_home/apt`-cancellation_policystrict_14_with_grace_period-availability_30-availability_60-availability_90-availability_365-cancellation_policystrict-reviews_per_month-beds-property_typeCondominium-number_of_reviews-property_typeCastle-minimum_nights , data = train)
+summary(test_model)
+AIC(test_model)
+```
+
+Standardizing all data
+
+```{r}
+# Load required libraries
+library(dplyr)
+
+# Identify all numeric columns using sapply
+numeric_vars_all <- names(cleaned_airbnb_data)[sapply(cleaned_airbnb_data, is.numeric)]
+
+# Standardizing all numeric columns
+cleaned_airbnb_data_standardized_all <- cleaned_airbnb_data %>%
+  mutate(across(all_of(numeric_vars_all), scale))
+
+# View the standardized data
+glimpse(cleaned_airbnb_data_standardized_all)
+
+```
+
+```{r}
+set.seed(2)
+trainIndex <- createDataPartition(cleaned_airbnb_data_standardized_all$price, p = 0.6, list = FALSE)
+train_s <- cleaned_airbnb_data_standardized_all[trainIndex, ]
+test_s <- cleaned_airbnb_data_standardized_all[-trainIndex, ]
+
+full_mode_standardisedl <- lm(price ~ ., data = train_s)
+summary(full_model)
+```
+
+THE ABOVE SHOWS THAT STANDARDIZING THE DATA HAS NO EFFECT ON THE LINEAR MODEL.
+
+Continuing again while trying different models. 
+
+
+```{r}
+test_model <- lm(price ~ .-latitude-longitude-property_typeTownhouse-`room_typeEntire_home/apt`-cancellation_policystrict_14_with_grace_period-availability_30-availability_60-availability_90-availability_365-cancellation_policystrict-reviews_per_month-beds-property_typeCondominium-number_of_reviews-property_typeCastle-instant_bookable-minimum_nights , data = train)
+summary(test_model)
+AIC(test_model)
+```
+
+
+```{r}
+library(leaps)
+
+# Perform exhaustive selection using regsubsets
+exhaustive_model <- regsubsets(price ~ ., data = cleaned_airbnb_data_standardized_all, nbest = 1, method = "exhaustive")
+
+# Summary of the model selection process
+summary_exhaustive <- summary(exhaustive_model)
+
+# View the summary
+print(summary_exhaustive)
+
+
+```
+```{r}
+# Load the necessary library
+library(MASS)
+
+# Start with a null model (intercept only)
+null_model <- lm(price ~ 1, data = train)
+
+# Define the full model (including all potential predictors)
+full_model <- lm(price ~ ., data = train)
+
+# Perform forward selection using step()
+forward_model <- step(null_model, scope = list(lower = null_model, upper = full_model), direction = "forward")
+
+# Summarize the model obtained through forward selection
+summary(forward_model)
+
+# Calculate AIC for the forward-selected model
+AIC(forward_model)
+
+```
+
+```{r}
+# Perform backward selection using step()
+backward_model <- step(full_model, direction = "backward")
+
+# Summarize the model obtained through backward selection
+summary(backward_model)
+
+# Calculate AIC for the backward-selected model
+AIC(backward_model)
+
+```
+```{r}
+# Compare AIC values of the different models
+
+ # Create summary variables for each model
+summary_forward <- summary(forward_model)   # Summary for forward selection model
+summary_backward <- summary(backward_model) # Summary for backward selection model
+summary_test <- summary(test_model)         # Summary for the original best model
+
+# Extract Adjusted R-squared from each summary
+adjusted_r2_forward <- summary_forward$adj.r.squared
+adjusted_r2_backward <- summary_backward$adj.r.squared
+adjusted_r2_test <- summary_test$adj.r.squared
+
+
+# Print the Adjusted R-squared values
+cat("Adjusted R-squared of Forward Model:", adjusted_r2_forward, "\n")
+cat("Adjusted R-squared of Backward Model:", adjusted_r2_backward, "\n")
+cat("Adjusted R-squared of Original Best Model:", adjusted_r2_test, "\n")
+
+
+cat("AIC of Forward Model:", AIC(forward_model), "\n")
+cat("AIC of Backward Model:", AIC(backward_model), "\n")
+cat("AIC of Original Best Model:", AIC(test_model), "\n")
+
+```
+
+Having run all the types of models, the Forward selection approach gives us the best model with the highest adjusted_r^2 and lowest AIC.
+
+
+```{r}
+# Load required libraries
+library(leaps)
+
+# Perform exhaustive selection using regsubsets
+exhaustive_model <- regsubsets(price ~ .,
+                               data = train,
+                               nbest = 1,           # Find the best model for each subset size
+                               method = "exhaustive")
+
+# Get a summary of the exhaustive search results
+summary_exhaustive <- summary(exhaustive_model)
+
+# Extract the model with the best Adjusted R-squared
+best_adjr2_model <- summary_exhaustive$which[best_adjr2, ]
+
+# Get predictor names from the model with best Adjusted R-squared
+selected_predictors <- names(best_adjr2_model)[best_adjr2_model][-1]  # Remove intercept
+
+# Refit the model using the selected predictors
+formula_str <- paste("price ~", paste(selected_predictors, collapse = " + "))
+best_model_exhaustive <- lm(as.formula(formula_str), data = train)
+
+# Calculate and print AIC for the best model based on Adjusted R-squared
+best_model_aic_exhaustive <- AIC(best_model_exhaustive)
+cat("AIC of the best model based on Adjusted R-squared:", best_model_aic_exhaustive, "\n")
+
+
+```
+
+```{r}
+summary_forward <- summary(forward_model)             # Forward selection model
+summary_backward <- summary(backward_model)           # Backward selection model
+summary_test <- summary(test_model)                   # Original best model
+
+# Extract Adjusted R-squared from each summary
+adjusted_r2_forward <- summary_forward$adj.r.squared
+adjusted_r2_backward <- summary_backward$adj.r.squared
+adjusted_r2_test <- summary_test$adj.r.squared
+
+# Print the Adjusted R-squared values for all models
+cat("Adjusted R-squared of Forward Model:", adjusted_r2_forward, "\n")
+cat("Adjusted R-squared of Backward Model:", adjusted_r2_backward, "\n")
+cat("Adjusted R-squared of Original Best Model:", adjusted_r2_test, "\n")
+cat("Adjusted R-squared of Exhaustive Best Model:", max(summary_exhaustive$adjr2), "\n")
+
+# Extract and print AIC for each model
+aic_forward <- AIC(forward_model)
+aic_backward <- AIC(backward_model)
+aic_test <- AIC(test_model)
+
+cat("AIC of Forward Model:", aic_forward, "\n")
+cat("AIC of Backward Model:", aic_backward, "\n")
+cat("AIC of Original Best Model:", aic_test, "\n")
+cat("AIC of Exhaustive Best Model:", best_model_aic_exhaustive, "\n")
+
+```
+
+
+
+```{r}
+# Extract the coefficients for the best model based on Adjusted R-squared
+coefficients_exhaustive <- coef(exhaustive_model, best_adjr2)
+
+# View the coefficients
+print(coefficients_exhaustive)
+
+```
+
+```{r}
+# Extract the names of the variables in the best model based on Adjusted R-squared
+best_model_vars <- names(coefficients_exhaustive)
+
+# Build the linear model using the selected predictors
+final_model <- lm(as.formula(paste("price ~", paste(best_model_vars[-1], collapse = " + "))), data = train)
+
+# Summarize the final model
+summary(final_model)
+
+# Calculate AIC for the final model
+AIC(final_model)
+
+```
+
+
+HENCE FORWARD SELECTION GIVES THE BEST MODEL
+
+
+To make the best model possible, we will take the forward selection model, and apply polynomial techniques and interactive variables approach to it with the most significant coeffiecients in order to achieve better adjusted r^2 and AIC.
+
+
+```{r}
+# Load necessary library
+library(dplyr)
+
+# Create the polynomial and interaction terms in the dataset
+train_feature_selection <- train %>%
+  mutate(
+    amenities_count_sq = amenities_count^2,
+    accommodates_sq = accommodates^2,
+    bedrooms_sq = bedrooms^2,
+    bathrooms_sq = bathrooms^2,
+    amenities_accommodates = amenities_count * accommodates,
+    amenities_bedrooms = amenities_count * bedrooms,
+    amenities_bathrooms = amenities_count * bathrooms,
+    accommodates_bedrooms = accommodates * bedrooms,
+    accommodates_bathrooms = accommodates * bathrooms,
+    bedrooms_bathrooms = bedrooms * bathrooms
+  )
+
+# View the updated dataset to verify new columns
+glimpse(train_feature_selection)
+
+# Build the polynomial regression model with degree = 2
+polynomial_model <- lm(price ~ amenities_count + accommodates + bedrooms + bathrooms +
+                       amenities_count_sq + accommodates_sq + bedrooms_sq + bathrooms_sq +
+                       amenities_accommodates + amenities_bedrooms + amenities_bathrooms +
+                       accommodates_bedrooms + accommodates_bathrooms + bedrooms_bathrooms,
+                       data = train_feature_selection)
+
+# Summarize the polynomial model to view the results
+summary(polynomial_model)
+
+
+```
+
+
+```{r}
+# Create a linear model using the variables from forward selection
+fwsm <- lm(formula = price ~ amenities_count + accommodates + bedrooms + 
+    bathrooms + `property_typeBed_&_Breakfast` + `room_typeEntire_home/apt` + 
+    property_typeHouse + host_since + property_typeCondominium + 
+    property_typeTownhouse + maximum_nights + extra_people + 
+    cancellation_policystrict + amenities_count_sq + amenities_accommodates, data = train_feature_selection)
+
+# Summarize the model to check results
+summary(fwsm)
+
+# Calculate AIC for the forward-selected model
+AIC(fwsm)
+
+
+```
+
+
+Interaction variables and polynomial encoding of certain variables, we expected to find some. varaibles, with which if we add a poly aspect or interactive variables, it may enhance the model ,but it does not make a significant difference. 
+
+
+```{r}
+# Predict on the testing set using each model
+predictions_forward <- predict(forward_model, newdata = test)
+predictions_backward <- predict(backward_model, newdata = test)
+predictions_test <- predict(test_model, newdata = test)
+predictions_exhaustive <- predict(best_model_exhaustive, newdata = test)
+
+# Load necessary package for accuracy metrics
+library(Metrics)
+
+# Calculate RMSE and R-squared for each model
+
+# Forward Model
+rmse_forward <- rmse(test$price, predictions_forward)
+r2_forward <- cor(test$price, predictions_forward)^2
+
+# Backward Model
+rmse_backward <- rmse(test$price, predictions_backward)
+r2_backward <- cor(test$price, predictions_backward)^2
+
+# Original Best Model
+rmse_test <- rmse(test$price, predictions_test)
+r2_test <- cor(test$price, predictions_test)^2
+
+# Exhaustive Best Model
+rmse_exhaustive <- rmse(test$price, predictions_exhaustive)
+r2_exhaustive <- cor(test$price, predictions_exhaustive)^2
+
+# Print out RMSE and R-squared values for all models
+cat("RMSE of Forward Model:", rmse_forward, "\n")
+cat("R-squared of Forward Model:", r2_forward, "\n")
+
+cat("RMSE of Backward Model:", rmse_backward, "\n")
+cat("R-squared of Backward Model:", r2_backward, "\n")
+
+cat("RMSE of Original Best Model:", rmse_test, "\n")
+cat("R-squared of Original Best Model:", r2_test, "\n")
+
+cat("RMSE of Exhaustive Best Model:", rmse_exhaustive, "\n")
+cat("R-squared of Exhaustive Best Model:", r2_exhaustive, "\n")
+
+```
+
+
+
+Let's try to run some KNN : 
+
+```{r}
+# Set up cross-validation control
+train_control <- trainControl(method = "cv", number = 10) # 10-fold cross-validation
+
+# Run KNN with cross-validation
+set.seed(2)
+knn_model <- train(price ~ .,
+                   data = train,
+                   method = "knn",
+                   trControl = train_control,
+                   preProcess = c("center", "scale"), # Standardize the data
+                   tuneLength = 10) # Tune the number of neighbors
+
+# Summarize KNN model
+print(knn_model)
+
+# Make predictions on the test set
+knn_predictions <- predict(knn_model, newdata = test)
+
+# Evaluate performance on the test set
+knn_rmse <- RMSE(knn_predictions, test$price)
+cat("KNN RMSE:", knn_rmse, "\n")
+
+```
+
+Random forest below : 
+
+```{r}
+# Run Random Forest with cross-validation
+set.seed(2)
+rf_model <- train(price ~ .,
+                  data = train,
+                  method = "rf",
+                  trControl = train_control,
+                  tuneLength = 5) # Tune over 5 different values for mtry
+
+# Summarize Random Forest model
+print(rf_model)
+
+# Make predictions on the test set
+rf_predictions <- predict(rf_model, newdata = test)
+
+# Evaluate performance on the test set
+rf_rmse <- RMSE(rf_predictions, test$price)
+cat("Random Forest RMSE:", rf_rmse, "\n")
+
+```
+
+Linear regression with cross-validation
+
+```{r}
+# Run Linear Regression with cross-validation
+set.seed(2)
+lm_model <- train(price ~ amenities_count + accommodates + bedrooms + 
+    bathrooms + `property_typeBed_&_Breakfast` + `room_typeEntire_home/apt` + 
+    property_typeHouse + host_since + property_typeCondominium + 
+    property_typeTownhouse + maximum_nights + extra_people + 
+    cancellation_policystrict,
+                  data = train,
+                  method = "lm",
+                  trControl = train_control)
+
+# Summarize Linear Regression model
+print(lm_model)
+
+# Make predictions on the test set
+lm_predictions <- predict(lm_model, newdata = test)
+
+# Evaluate performance on the test set
+lm_rmse <- RMSE(lm_predictions, test$price)
+cat("Linear Regression RMSE:", lm_rmse, "\n")
+
+```
+
+```{r}
+# Print out the RMSE values for comparison
+cat("KNN RMSE:", knn_rmse, "\n")
+cat("Random Forest RMSE:", rf_rmse, "\n")
+cat("Linear Regression RMSE:", lm_rmse, "\n")
+
+```
+
+PRESENTATION NOTES : 
+
+1. Start with explaining all the linear models
+2. Then explain random forest, knn and finally then say that we did a linear regression model with cross validation on the best model found above which was the forward selection model.
+3. After running the linear model with CV (cross validation), this model had the highest adjusted R^2 along with lowest RMSE and AIC, proving that this is the best model by far.
+4. Mention the variables used along with their significance factor and everything.
+
+```{r}
+# Calculate residuals for each model
+residuals_forward <- test$price - predictions_forward
+residuals_backward <- test$price - predictions_backward
+residuals_test <- test$price - predictions_test
+residuals_exhaustive <- test$price - predictions_exhaustive
+
+```
+
+
+```{r}
+# Load required library
+library(ggplot2)
+
+# Residual vs. Fitted plot for Forward Model
+ggplot(data = NULL, aes(x = predictions_forward, y = residuals_forward)) +
+  geom_point() +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  labs(title = "Residuals vs Fitted (Forward Model)", x = "Fitted Values", y = "Residuals") +
+  theme_minimal()
+
+# Repeat similarly for Backward, Original Best, and Exhaustive models:
+# Replace predictions and residuals variables accordingly for each model
+
+```
+
+```{r}
+# Load required library
+library(ggplot2)
+
+# Residual vs. Fitted plot for Forward Model
+ggplot(data = NULL, aes(x = predictions_forward, y = residuals_forward)) +
+  geom_point() +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  labs(title = "Residuals vs Fitted (Forward Model)", x = "Fitted Values", y = "Residuals") +
+  theme_minimal()
+
+# Repeat similarly for Backward, Original Best, and Exhaustive models:
+# Replace predictions and residuals variables accordingly for each model
+
+# Q-Q Plot for Forward Model residuals
+qqnorm(residuals_forward, main = "Q-Q Plot of Residuals (Forward Model)")
+qqline(residuals_forward, col = "red")
+
+# Repeat similarly for other models: residuals_backward, residuals_test, residuals_exhaustive
+
+
+```
+
+
+
